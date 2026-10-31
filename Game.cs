@@ -31,6 +31,8 @@ public class Game : GameWindow
     private int _frames, _lastFrames;
     private bool _titleDirty = true;
 
+    private int speedMult = 1;
+
     public Game(int width, int height, string title)
         : base(GameWindowSettings.Default,
                new NativeWindowSettings
@@ -102,13 +104,33 @@ public class Game : GameWindow
         float dt = (float)args.Time;
         SceneObject sel = _scene[_selected];
 
-        const float moveSpeed = 2.0f;   // unități de lume pe secundă
+        if(KeyboardState.IsKeyDown(Keys.LeftShift)){
+            speedMult = 3;
+        } else speedMult = 1;
+            
+        float moveSpeed = 2.0f * speedMult;   // unități de lume pe secundă
         if (KeyboardState.IsKeyDown(Keys.Left))  sel.Transform.Position.X -= moveSpeed * dt;
         if (KeyboardState.IsKeyDown(Keys.Right)) sel.Transform.Position.X += moveSpeed * dt;
         if (KeyboardState.IsKeyDown(Keys.Down))  sel.Transform.Position.Y -= moveSpeed * dt;
         if (KeyboardState.IsKeyDown(Keys.Up))    sel.Transform.Position.Y += moveSpeed * dt;
 
         // TODO (T2): Q / E rotesc obiectul, Z / X îl scalează
+        // Comentariu cerut: de ce scalarea se face prin înmulțire și nu prin adunare.
+        // Pentru că raportul dintre scale original și noul scale va fi constant.
+        if(KeyboardState.IsKeyDown(Keys.Q)) sel.Transform.Rotation -= 90 * dt * speedMult;
+        if(KeyboardState.IsKeyDown(Keys.E)) sel.Transform.Rotation += 90 * dt * speedMult;
+
+        if(KeyboardState.IsKeyDown(Keys.Z)){
+            sel.Transform.Scale.X *=  MathF.Pow(1f/(1.5f * speedMult), dt);
+            sel.Transform.Scale.Y *=  MathF.Pow(1f/(1.5f * speedMult), dt);
+        }
+        if(KeyboardState.IsKeyDown(Keys.X)){
+            sel.Transform.Scale.X *=  MathF.Pow(1.5f * speedMult, dt);
+            sel.Transform.Scale.Y *=  MathF.Pow(1.5f * speedMult, dt);
+        }
+
+        sel.Transform.Scale.X = Math.Clamp(sel.Transform.Scale.X, 0.1f, 10f);
+        sel.Transform.Scale.Y = Math.Clamp(sel.Transform.Scale.Y, 0.1f, 10f);
 
         if (KeyboardState.IsKeyPressed(Keys.Tab)) _selected = (_selected + 1) % _scene.Count;
         if (KeyboardState.IsKeyPressed(Keys.O))   _camera.IsPerspective = !_camera.IsPerspective;
