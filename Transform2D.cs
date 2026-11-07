@@ -15,7 +15,7 @@ public class Transform2D
 
     public Matrix4 ModelMatrix =>
         // TODO (T1): scalare, apoi rotație, apoi translație
-        // Comentariu cerut: de ce scalarea se face prin înmulțire și nu prin adunare.
+        // Comentariu cerut: ce s-ar vedea dacă translația ar fi aplicată înaintea rotației.
         // Rotația ar crea o orbită față de punctul de origine al obiectului.
         Matrix4.CreateScale(Scale.X, Scale.Y, Depth) * Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(Rotation)) * Matrix4.CreateTranslation(Position.X, Position.Y, Depth);
 
