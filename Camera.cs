@@ -1,59 +1,90 @@
 using OpenTK.Mathematics;
+using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace Egc;
 
 /// <summary>
-/// Camera 2D: matricea view (secțiunea 6) și matricea projection (secțiunea 7).
-/// Clasa este completă; o folosiți la exercițiile din clasă și la tema T3.
+/// Clasa de bază a camerelor 3D. Conține ce au în comun toate camerele:
+/// proiecția în perspectivă (FOV, near, far, raportul de aspect) și "contractul" pe care
+/// trebuie să-l respecte fiecare cameră concretă: poziție, direcția privirii, matricea view,
+/// reacția la tastatură și mouse.
+/// Camera FPS (FpsCamera) se scrie în laborator; camera orbită (OrbitCamera) este tema.
 /// </summary>
-public class Camera
+public abstract class Camera
 {
-    // --- View (secțiunea 6) ---------------------------------------------------
+    // --- Projection (secțiunea 4) ---------------------------------------------
 
-    public Vector2 Position = Vector2.Zero;   // punctul din lume aflat în centrul imaginii
-    public float Zoom = 1.0f;                 // > 1: obiectele apar mai mari; < 1: mai mici
-    public float Distance = 5.0f;             // distanța camerei față de planul scenei (contează în perspectivă)
+    public const float MinFov = 10.0f;     // grade
+    public const float MaxFov = 120.0f;    // grade
 
-    /// <summary>
-    /// Matricea view = inversa transformării camerei: lumea se mută în sens invers față de cameră,
-    /// apoi se scalează față de centrul imaginii (zoom).
-    /// </summary>
-    public Matrix4 ViewMatrix =>
-        Matrix4.CreateTranslation(-Position.X, -Position.Y, -Distance)
-      * Matrix4.CreateScale(Zoom, Zoom, 1.0f);
+    /// <summary>Câmpul vizual VERTICAL, în grade (unghiul de sus până jos al imaginii).</summary>
+    public float FieldOfView = 60.0f;
 
-    // --- Projection (secțiunea 7) ---------------------------------------------
-
-    public float ViewHeight = 4.0f;       // câte unități de lume se văd pe verticală (ortografic)
-    public float FieldOfView = 45.0f;     // în grade (perspectivă)
-    public bool IsPerspective = false;    // comutat cu tasta O
+    public float Near = 0.1f;              // planul apropiat: ce e mai aproape nu se desenează
+    public float Far = 100.0f;             // planul depărtat: ce e mai departe nu se desenează
 
     /// <summary>Raportul lățime / înălțime al ferestrei.</summary>
     public float AspectRatio { get; private set; } = 4.0f / 3.0f;
 
-    public Matrix4 ProjectionMatrix => IsPerspective ? Perspective() : Orthographic();
+    /// <summary>Matricea de proiecție în perspectivă.</summary>
+    public Matrix4 ProjectionMatrix =>
+        // TODO 5.1 (a): proiecția în perspectivă, cu FieldOfView (în radiani!), AspectRatio, Near, Far.
+        //               Până atunci se folosește proiecția ortografică din laboratorul 4.
+        Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(FieldOfView), AspectRatio, Near, Far);
+
+    /// <summary>Câmpul vizual ORIZONTAL, în grade, care rezultă din cel vertical și din raportul de aspect.</summary>
+    public float HorizontalFov
+    {
+        get
+        {
+            // TODO 5.1 (b): hFOV = 2 · atan( tan(vFOV / 2) · aspect ); atenție la grade / radiani
+            float vFovRad = MathHelper.DegreesToRadians(FieldOfView);
+            float hFovRad = 2.0f * MathF.Atan(MathF.Tan(vFovRad / 2.0f) * AspectRatio);
+            return MathHelper.RadiansToDegrees(hFovRad);
+        }
+    }
 
     /// <summary>Apelată din Game.OnResize: reține noul raport de aspect.</summary>
     public void Resize(int width, int height)
     {
-        AspectRatio = width / (float)Math.Max(height, 1);
+        // La minimizare fereastra are 0 × 0 pixeli; un aspect 0 ar face proiecția invalidă.
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+        AspectRatio = width / (float)height;
     }
 
-    private Matrix4 Orthographic()
+    /// <summary>Modifică FOV-ul cu <paramref name="deltaDegrees"/> și îl păstrează între MinFov și MaxFov.</summary>
+    public void ChangeFov(float deltaDegrees)
     {
-        float h = ViewHeight / 2.0f;
-        float w = h * AspectRatio;    // lățimea se adaptează la forma ferestrei
-        return Matrix4.CreateOrthographicOffCenter(-w, w, -h, h, 0.1f, 100.0f);
+        FieldOfView = Math.Clamp(FieldOfView + deltaDegrees, MinFov, MaxFov);
     }
 
-    private Matrix4 Perspective() =>
-        Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(FieldOfView), AspectRatio, 0.1f, 100.0f);
+    // --- Ce trebuie să ofere fiecare cameră concretă -----------------------------
+
+    /// <summary>Numele afișat în titlul ferestrei și în consolă.</summary>
+    public abstract string Name { get; }
+
+    /// <summary>Poziția camerei (ochiul), în coordonate de lume.</summary>
+    public abstract Vector3 Position { get; }
+
+    /// <summary>Direcția în care privește camera (vector unitate).</summary>
+    public abstract Vector3 Front { get; }
+
+    /// <summary>Matricea view: world space -> view space.</summary>
+    public abstract Matrix4 ViewMatrix { get; }
+
+    /// <summary>
+    /// Apelată la fiecare cadru din Game.OnUpdateFrame.
+    /// <paramref name="mouseDelta"/> = deplasarea mouse-ului față de cadrul anterior, în pixeli.
+    /// <paramref name="dt"/> = timpul scurs de la cadrul anterior, în secunde.
+    /// </summary>
+    public abstract void Update(KeyboardState keyboard, MouseState mouse, Vector2 mouseDelta, float dt);
 
     /// <summary>Readuce camera în starea inițială (tasta R).</summary>
-    public void Reset()
-    {
-        Position = Vector2.Zero;
-        Zoom = 1.0f;
-        IsPerspective = false;
-    }
+    public abstract void Reset();
+
+    /// <summary>Rândurile cu starea camerei, afișate în consolă la tasta I.</summary>
+    public abstract IEnumerable<string> Describe();
 }
