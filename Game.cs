@@ -8,30 +8,30 @@ namespace Egc;
 
 /// <summary>
 /// Fereastra aplicației și bucla principală (main game loop).
-/// Față de laboratorul 3: o scenă cu mai multe obiecte, fiecare cu matricea lui model,
-/// o cameră cu matricele view și projection, tastatura și mouse-ul.
+/// Față de laboratorul 5, Game este mai "subțire": nu mai conține scena, ci doar leagă
+/// componentele între ele. La fiecare cadru:
+///   1. Clock  – transformă timpul real în timp de joc (pauză, scara timpului);
+///   2. Input  – citește starea tastaturii și a mouse-ului; restul programului întreabă de ACȚIUNI;
+///   3. Scene  – își actualizează animațiile cu timpul de joc și se desenează.
 /// </summary>
 public class Game : GameWindow
 {
-    // Obiecte care NU depind de OpenGL pot fi create imediat.
-    private readonly Camera _camera = new();
+    private readonly Clock _clock = new();
+    private readonly Input _input = new();
+    private readonly FixedCamera _camera = new();
 
-    // Obiectele care folosesc OpenGL se creează în OnLoad (abia atunci există contextul OpenGL).
+    // Scenele (Tab trece la următoarea). Se încarcă în OnLoad, după crearea contextului OpenGL.
+    private readonly List<Scene> _scenes = new();
+    private int _current;
+    private Scene ActiveScene => _scenes[_current];
+
     private Shader _shader = null!;
-    private readonly List<SceneObject> _scene = new();
-    private readonly List<Transform2D> _initialTransforms = new();   // pentru tasta R
+    private bool _wireframe;
 
-    // Starea aplicației (se modifică în OnUpdateFrame, se folosește în OnRenderFrame).
-    private int _selected;            // indexul obiectului selectat în _scene (tasta Tab)
-    private bool _wireframe;          // contur (true) sau plin (false)
-
-    // Contoare afișate în titlul ferestrei.
+    // Titlul ferestrei: se reface de câteva ori pe secundă, nu la fiecare cadru.
     private readonly string _baseTitle;
-    private double _secondTimer;
+    private double _titleTimer, _fpsTimer;
     private int _frames, _lastFrames;
-    private bool _titleDirty = true;
-
-    private int speedMult = 1;
 
     public Game(int width, int height, string title)
         : base(GameWindowSettings.Default,
@@ -39,148 +39,140 @@ public class Game : GameWindow
                {
                    ClientSize = new Vector2i(width, height),
                    Title = title,
-                   APIVersion = new Version(3, 3),          // cerem OpenGL 3.3 ...
-                   Profile = ContextProfile.Core,           // ... profil Core (fără modul imediat)
+                   APIVersion = new Version(3, 3),
+                   Profile = ContextProfile.Core,
                    Flags = ContextFlags.ForwardCompatible
                })
     {
         _baseTitle = title;
-        VSync = VSyncMode.On;   // swap-ul bufferelor așteaptă reîmprospătarea monitorului
+        VSync = VSyncMode.On;
     }
 
     /// <summary>Apelată O SINGURĂ DATĂ, după crearea ferestrei și a contextului OpenGL.</summary>
     protected override void OnLoad()
     {
         base.OnLoad();
-
+        ConsolePanel.Init();
         Console.WriteLine($"OpenGL  : {GL.GetString(StringName.Version)}");
         Console.WriteLine($"Renderer: {GL.GetString(StringName.Renderer)}");
 
         GL.Viewport(0, 0, ClientSize.X, ClientSize.Y);
         _camera.Resize(ClientSize.X, ClientSize.Y);
+        GL.Enable(EnableCap.DepthTest);
 
         _shader = Shader.FromFiles("Shaders/shader.vert", "Shaders/shader.frag");
 
-        // Scena: aceleași forme din laboratorul 3, acum plasate în lume prin Transform2D.
-        // Depth (z) contează doar în perspectivă (tasta O, secțiunea 7.2).
-        AddObject("pătrat", Shapes.Quad(),
-                  new Transform2D { Position = new Vector2(-1.8f, -1.0f), Depth = -3.0f });
-        AddObject("triunghi", Shapes.Triangle(),
-                  new Transform2D { Position = new Vector2(-1.2f, 1.0f)});
-        AddObject("hexagon", Shapes.RegularPolygon(6, 0.5f),
-                  new Transform2D { Position = new Vector2(2.0f, 1.0f) });
-        AddObject("cerc", Shapes.RegularPolygon(64, 0.5f),
-                  new Transform2D { Position = new Vector2(0.8f, -0.6f), Depth = 2.0f });
+        BindCommonActions();
+
+        _scenes.Add(new LabScene());
+        // TEMA: adăugați aici scena (sau scenele) temei; Tab trece de la o scenă la alta.
+
+        foreach (Scene scene in _scenes)
+        {
+            scene.Load(_input);
+        }
+        ActivateScene(0);
+        PrintHelp();
     }
 
-    /// <summary>Adaugă un obiect în scenă și reține transformarea lui inițială (pentru tasta R).</summary>
-    private void AddObject(string name, Mesh mesh, Transform2D transform)
+    /// <summary>Acțiunile comune tuturor scenelor. Tastele se schimbă DOAR aici.</summary>
+    private void BindCommonActions()
     {
-        _scene.Add(new SceneObject(name, mesh, transform));
-        _initialTransforms.Add(transform.Clone());
+        _input.Bind(Actions.Quit, Keys.Escape);
+        _input.Bind(Actions.Help, Keys.H);
+        _input.Bind(Actions.Info, Keys.I);
+        _input.Bind(Actions.Pause, Keys.P);
+        _input.Bind(Actions.Slower, Keys.LeftBracket, Keys.Minus, Keys.KeyPadSubtract);
+        _input.Bind(Actions.Faster, Keys.RightBracket, Keys.Equal, Keys.KeyPadAdd);
+        _input.Bind(Actions.NormalSpeed, Keys.N);
+        _input.Bind(Actions.Freeze, Keys.B);
+        _input.Bind(Actions.Wireframe, Keys.F);
+        _input.Bind(Actions.VSync, Keys.L);
+        _input.Bind(Actions.NextScene, Keys.Tab);
     }
 
-    /// <summary>Apelată când se schimbă dimensiunea ferestrei.</summary>
+    private static readonly string[] CommonActions =
+    {
+        Actions.Pause, Actions.Slower, Actions.Faster, Actions.NormalSpeed, Actions.Freeze,
+        Actions.NextScene, Actions.Wireframe, Actions.VSync, Actions.Info, Actions.Help, Actions.Quit,
+    };
+
+    private void ActivateScene(int index)
+    {
+        _current = index;
+        _camera.Position = ActiveScene.CameraPosition;
+        _camera.Target = ActiveScene.CameraTarget;
+        ConsolePanel.PrintMessage($"scena: {ActiveScene.Name}");
+        _titleTimer = 1.0;   // titlul se reface imediat
+    }
+
     protected override void OnResize(ResizeEventArgs e)
     {
         base.OnResize(e);
-
-        GL.Viewport(0, 0, e.Width, e.Height);   // zona ferestrei în care se desenează
-        _camera.Resize(e.Width, e.Height);      // proiecția se adaptează la noul raport de aspect
+        GL.Viewport(0, 0, e.Width, e.Height);
+        _camera.Resize(e.Width, e.Height);
     }
 
-    /// <summary>Apelată la fiecare iterație a buclei: LOGICA aplicației (intrări, mișcare, timp).</summary>
+    /// <summary>Apelată la fiecare iterație a buclei: LOGICA aplicației.</summary>
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
 
-        if (KeyboardState.IsKeyDown(Keys.Escape))
+        // 1. Timpul: real -> de joc.  2. Input: starea dispozitivelor pentru acest cadru.
+        _clock.Tick(args.Time);
+        _input.Update(KeyboardState, MouseState);
+
+        // Un pas real neobișnuit de mare (blocare, fereastra trasă cu mouse-ul) este semnalat în consolă.
+        if (_clock.RealDeltaTime > Clock.MaxDelta)
+        {
+            ConsolePanel.PrintMessage($"pas real {_clock.RealDeltaTime * 1000:F0} ms -> pas de joc {_clock.DeltaTime * 1000:F0} ms");
+        }
+
+        if (_input.WasPressed(Actions.Quit))
         {
             Close();
+            return;
         }
+        HandleCommonActions();
 
-        // --- Obiectul selectat: tastatura (secțiunea 8) ------------------------------
+        // 3. Scena, cu timpul de JOC (0 în pauză, scalat cu TimeScale).
+        ActiveScene.Update(_clock.DeltaTime, _input);
 
-        float dt = (float)args.Time;
-        SceneObject sel = _scene[_selected];
+        // Titlul și contorul de cadre folosesc timpul REAL: trebuie să meargă și în pauză.
+        UpdateTitle(_clock.RealDeltaTime);
+    }
 
-        if(KeyboardState.IsKeyDown(Keys.LeftShift)){
-            speedMult = 3;
-        } else speedMult = 1;
-            
-        float moveSpeed = 2.0f * speedMult;   // unități de lume pe secundă
-        if (KeyboardState.IsKeyDown(Keys.Left))  sel.Transform.Position.X -= moveSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.Right)) sel.Transform.Position.X += moveSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.Down))  sel.Transform.Position.Y -= moveSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.Up))    sel.Transform.Position.Y += moveSpeed * dt;
+    private void HandleCommonActions()
+    {
+        if (_input.WasPressed(Actions.Help)) PrintHelp();
+        if (_input.WasPressed(Actions.Info)) PrintInfo();
 
-        // TODO (T2): Q / E rotesc obiectul, Z / X îl scalează
-        // Comentariu cerut: de ce scalarea se face prin înmulțire și nu prin adunare.
-        // Pentru că raportul dintre scale original și noul scale va fi constant.
-        if(KeyboardState.IsKeyDown(Keys.Q)) sel.Transform.Rotation -= 90 * dt * speedMult;
-        if(KeyboardState.IsKeyDown(Keys.E)) sel.Transform.Rotation += 90 * dt * speedMult;
-
-        if(KeyboardState.IsKeyDown(Keys.Z)){
-            sel.Transform.Scale.X *=  MathF.Pow(1f/(1.5f * speedMult), dt);
-            sel.Transform.Scale.Y *=  MathF.Pow(1f/(1.5f * speedMult), dt);
-        }
-        if(KeyboardState.IsKeyDown(Keys.X)){
-            sel.Transform.Scale.X *=  MathF.Pow(1.5f * speedMult, dt);
-            sel.Transform.Scale.Y *=  MathF.Pow(1.5f * speedMult, dt);
-        }
-
-        sel.Transform.Scale.X = Math.Clamp(sel.Transform.Scale.X, 0.1f, 10f);
-        sel.Transform.Scale.Y = Math.Clamp(sel.Transform.Scale.Y, 0.1f, 10f);
-
-        if (KeyboardState.IsKeyPressed(Keys.Tab)) _selected = (_selected + 1) % _scene.Count;
-        if (KeyboardState.IsKeyPressed(Keys.O))   _camera.IsPerspective = !_camera.IsPerspective;
-        if (KeyboardState.IsKeyPressed(Keys.F))   _wireframe = !_wireframe;
-        if (KeyboardState.IsKeyPressed(Keys.R))   ResetScene();
-
-        if (KeyboardState.IsKeyPressed(Keys.Tab) || KeyboardState.IsKeyPressed(Keys.O) ||
-            KeyboardState.IsKeyPressed(Keys.R))
+        if (_input.WasPressed(Actions.Pause))
         {
-            _titleDirty = true;
+            _clock.Paused = !_clock.Paused;
+            ConsolePanel.PrintMessage(_clock.Paused ? "pauză" : "continuare");
         }
+        if (_input.WasPressed(Actions.Slower)) _clock.ChangeScale(0.5f);
+        if (_input.WasPressed(Actions.Faster)) _clock.ChangeScale(2.0f);
+        if (_input.WasPressed(Actions.NormalSpeed)) _clock.ResetScale();
 
-        // --- Obiectul selectat: mouse-ul (secțiunea 9) -------------------------------
-
-        // TODO (T3): la clic stânga, obiectul selectat se mută în punctul din lume aflat sub cursor
-        //            (folosiți ScreenToWorld; Depth nu se schimbă)
-        if (IsMouseButtonDown(MouseButton.Left)){
-            Vector2 world = ScreenToWorld(new Vector2(MousePosition.X, MousePosition.Y));
-            sel.Transform.Position.X = world.X;
-            sel.Transform.Position.Y = world.Y;
-        }
-        // TODO (T4, facultativ): clic dreapta = pivot; tasta P ținută = rotație în jurul pivotului
-
-        // --- Camera: tastatura și rotița (secțiunea 6.2) -----------------------------
-
-        float camSpeed = 3.0f / _camera.Zoom;                    // unități de lume pe secundă
-        if (KeyboardState.IsKeyDown(Keys.A)) _camera.Position.X -= camSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.D)) _camera.Position.X += camSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.S)) _camera.Position.Y -= camSpeed * dt;
-        if (KeyboardState.IsKeyDown(Keys.W)) _camera.Position.Y += camSpeed * dt;
-
-        _camera.Zoom *= MathF.Pow(1.1f, MouseState.ScrollDelta.Y);   // un pas al rotiței = ±10 %
-        _camera.Zoom = Math.Clamp(_camera.Zoom, 0.1f, 10.0f);
-
-        // --- Titlul ferestrei: obiectul selectat, proiecția, cadre pe secundă --------
-
-        _secondTimer += args.Time;
-        if (_secondTimer >= 1.0)
+        // B: simulăm o "înghețare" a programului (ca la tragerea ferestrei sau la o încărcare lungă).
+        // Cadrul următor primește un args.Time de aproximativ 0,5 s.
+        if (_input.WasPressed(Actions.Freeze))
         {
-            _lastFrames = _frames;
-            _frames = 0;
-            _secondTimer -= 1.0;
-            _titleDirty = true;
+            ConsolePanel.PrintMessage("blocare simulată: 0,5 s");
+            Thread.Sleep(500);
         }
 
-        if (_titleDirty)
+        if (_input.WasPressed(Actions.Wireframe)) _wireframe = !_wireframe;
+        if (_input.WasPressed(Actions.VSync))
         {
-            string projection = _camera.IsPerspective ? "perspectivă" : "ortografică";
-            Title = $"{_baseTitle} | selectat: {_scene[_selected].Name} | proiecție {projection} | FPS: {_lastFrames}";
-            _titleDirty = false;
+            VSync = VSync == VSyncMode.On ? VSyncMode.Off : VSyncMode.On;
+            ConsolePanel.PrintMessage($"VSync: {(VSync == VSyncMode.On ? "pornit" : "oprit")}");
+        }
+        if (_input.WasPressed(Actions.NextScene))
+        {
+            ActivateScene((_current + 1) % _scenes.Count);
         }
     }
 
@@ -190,76 +182,64 @@ public class Game : GameWindow
         base.OnRenderFrame(args);
         _frames++;
 
-        // 1. Ștergem imaginea veche din back buffer.
         GL.ClearColor(0.12f, 0.14f, 0.18f, 1.0f);
-        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        GL.PolygonMode(TriangleFace.FrontAndBack, _wireframe ? PolygonMode.Line : PolygonMode.Fill);
 
-        // 2. Starea de rasterizare și programul shader.
-        SetWireframe(_wireframe);
         _shader.Use();
-
-        // 3. View și projection sunt aceleași pentru toate obiectele: le trimitem o singură dată.
         _shader.SetMatrix4("uView", _camera.ViewMatrix);
         _shader.SetMatrix4("uProjection", _camera.ProjectionMatrix);
+        ActiveScene.Draw(_shader);
 
-        // 4. Fiecare obiect: matricea lui model, nuanța, apoi desenarea.
-        foreach (SceneObject obj in _scene)
-        {
-            _shader.SetMatrix4("uModel", obj.Transform.ModelMatrix);
-            _shader.SetColor("uTint", obj.Tint);
-            obj.Mesh.Draw();
-        }
-
-        // TODO (T5, facultativ): satelitul obiectului selectat
-
-        // 5. Afișăm cadrul terminat: back buffer <-> front buffer.
         SwapBuffers();
     }
 
-    /// <summary>Apelată O SINGURĂ DATĂ, la închiderea ferestrei: eliberăm resursele GPU.</summary>
     protected override void OnUnload()
     {
-        foreach (SceneObject obj in _scene)
+        foreach (Scene scene in _scenes)
         {
-            obj.Dispose();
+            scene.Dispose();
         }
         _shader.Dispose();
-
         base.OnUnload();
     }
 
-    /// <summary>Transformă poziția mouse-ului (pixeli, origine stânga-sus) în coordonate de lume.</summary>
-    private Vector2 ScreenToWorld(Vector2 mousePixels)
+    // --- Titlul ferestrei și consola -------------------------------------------------------
+
+    private void UpdateTitle(double realSeconds)
     {
-        // TODO (T3): pasul 1 (pixel → NDC), apoi pasul 2 (NDC → lume, cu inversa lui view * projection)
-        // Comentariu cerut: de ce apare semnul minus (sau 1 −) în formula pentru y.
-        // apare din cauza orientării opuse a axei Y între sistemul ferestrei (ecran / mouse) și NDC:
-        float x_ndc = (2.0f * mousePixels.X / ClientSize.X) - 1.0f;
-        float y_ndc = 1.0f - (2.0f * mousePixels.Y / ClientSize.Y);
-
-        Matrix4 invViewProj = Matrix4.Invert(_camera.ViewMatrix * _camera.ProjectionMatrix);
-        Vector4 world = new Vector4(x_ndc, y_ndc, 0.0f, 1.0f) * invViewProj;
-
-        return world.Xy / world.W;
-    }
-
-    /// <summary>Tasta R: obiectele revin la transformările inițiale, camera la starea inițială.</summary>
-    private void ResetScene()
-    {
-        for (int i = 0; i < _scene.Count; i++)
+        _fpsTimer += realSeconds;
+        if (_fpsTimer >= 1.0)
         {
-            _scene[i].Transform = _initialTransforms[i].Clone();
+            _lastFrames = _frames;
+            _frames = 0;
+            _fpsTimer -= Math.Floor(_fpsTimer);
         }
-        _camera.Reset();
+
+        _titleTimer += realSeconds;
+        if (_titleTimer < 0.25) return;
+        _titleTimer = 0.0;
+
+        string pause = _clock.Paused ? " | PAUZĂ" : "";
+        string status = ActiveScene.Status.Length > 0 ? $" | {ActiveScene.Status}" : "";
+        Title = $"{_baseTitle} | {ActiveScene.Name} | t = {_clock.TotalTime:F1} s | × {_clock.TimeScale:0.###}{pause}{status} | FPS: {_lastFrames}";
     }
 
-    /// <summary>
-    /// Contur / plin. Dacă Visual Studio semnalează o eroare la primul parametru,
-    /// folosiți aici tipul acceptat de versiunea voastră (vezi laboratorul 2, Problema 3):
-    /// TriangleFace.FrontAndBack sau MaterialFace.FrontAndBack.
-    /// </summary>
-    private static void SetWireframe(bool wireframe)
+    private void PrintHelp()
     {
-        GL.PolygonMode(TriangleFace.FrontAndBack, wireframe ? PolygonMode.Line : PolygonMode.Fill);
+        ConsolePanel.PrintHelp(_baseTitle, _input.Describe(CommonActions), _input.Describe(ActiveScene.ActionNames));
+    }
+
+    private void PrintInfo()
+    {
+        var lines = new List<string>
+        {
+            $"Scena          : {ActiveScene.Name}",
+            $"Timp de joc    : {_clock.TotalTime:F2} s   scara: × {_clock.TimeScale:0.###}   pauză: {(_clock.Paused ? "da" : "nu")}",
+            $"Δt real / joc  : {_clock.RealDeltaTime * 1000:F1} ms / {_clock.DeltaTime * 1000:F1} ms",
+            $"Cadre/secundă  : {_lastFrames}   VSync: {(VSync == VSyncMode.On ? "pornit" : "oprit")}",
+        };
+        lines.AddRange(ActiveScene.Describe());
+        ConsolePanel.PrintInfo(lines);
     }
 }

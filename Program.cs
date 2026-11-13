@@ -1,7 +1,6 @@
-//sorin.crismaru@student.usv.ro
 using Egc;
 
 // Program.cs conține DOAR inițializarea aplicației:
 // creăm fereastra (clasa Game) și pornim bucla principală.
-using var game = new Game(800, 600, "EGC – Laborator 04");
+using var game = new Game(1024, 640, "EGC – Laborator 06");
 game.Run();
